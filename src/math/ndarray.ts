@@ -17,56 +17,15 @@
 
 import {ENV} from '../environment';
 import * as util from '../util';
-import {ArrayData, TypedArray} from '../util';
-
-import {GPGPUContext} from './backends/webgl/gpgpu_context';
-import {TextureType} from './backends/webgl/tex_util';
-import {TextureManager} from './backends/webgl/texture_manager';
-import * as webgl_util from './backends/webgl/webgl_util';
+import {ArrayData} from '../util';
+import {DataTypes, NDArrayData} from './ndarray_manager';
 import {RandNormalDataTypes} from './rand';
 import {MPRandGauss} from './rand';
-
-// These global variables need to be initialized to null so that closure knows
-// not to seal them.
-/** @hidden */
-export let GPGPU: GPGPUContext = null;
-/** @hidden */
-export let TEXTURE_MANAGER: TextureManager = null;
 
 export enum DType {
   float32 = 'float32',
   int32 = 'int32',
   bool = 'bool'
-}
-
-/** @hidden */
-export interface DataTypes {
-  float32: Float32Array;
-  int32: Int32Array;
-  bool: Uint8Array;
-}
-
-/** @hidden */
-export interface NDArrayData<T extends keyof DataTypes> {
-  values?: DataTypes[T];
-  texture?: WebGLTexture;
-  /** [rows, columns] shape of the texture. */
-  textureShapeRC?: [number, number];
-  textureType?: TextureType;
-  isDisposed?: boolean;
-}
-
-/** @hidden */
-export function initializeGPU(
-    gpgpu: GPGPUContext, textureManager: TextureManager) {
-  GPGPU = gpgpu;
-  TEXTURE_MANAGER = textureManager;
-}
-
-function throwIfGPUNotInitialized() {
-  if (GPGPU == null || TEXTURE_MANAGER == null) {
-    throw new Error('GPU not intialized.');
-  }
 }
 
 export class NDArray<T extends keyof DataTypes = keyof DataTypes> {
@@ -106,10 +65,6 @@ export class NDArray<T extends keyof DataTypes = keyof DataTypes> {
     }
 
     this.shape = shape;
-
-    if (data.textureType == null) {
-      data.textureType = TextureType.DEFAULT;
-    }
 
     this.ndarrayData = data;
     this.dtype = dtype || ('float32' as T);
@@ -381,24 +336,6 @@ export class NDArray<T extends keyof DataTypes = keyof DataTypes> {
       this.disposeTexture();
     }
     return this.ndarrayData.values;
-  }
-
-  private uploadToGPU() {
-    throwIfGPUNotInitialized();
-    this.throwIfDisposed();
-    this.ndarrayData.textureShapeRC =
-        webgl_util.getTextureShapeFromLogicalShape(GPGPU.gl, this.shape);
-    this.ndarrayData.texture =
-        TEXTURE_MANAGER.acquireTexture(this.ndarrayData.textureShapeRC);
-    this.ndarrayData.textureType = TextureType.DEFAULT;
-
-    GPGPU.uploadMatrixToTexture(
-        this.ndarrayData.texture, this.ndarrayData.textureShapeRC[0],
-        // TODO(smilkov): Propagate the original typed array to gpgpu.
-        this.ndarrayData.textureShapeRC[1],
-        typedArrayToFloat32(this.ndarrayData.values, this.dtype));
-
-    this.ndarrayData.values = null;
   }
 
   getTexture(): WebGLTexture {
@@ -944,7 +881,7 @@ export class Array4D<T extends keyof DataTypes = keyof DataTypes> extends
 }
 
 function copyTypedArray<T extends keyof DataTypes>(
-    array: DataTypes[T]|number[]|boolean[], dtype: T): DataTypes[T] {
+    array: DataTypes[T] | number[] | boolean[], dtype: T): DataTypes[T] {
   if (dtype == null || dtype === 'float32') {
     return new Float32Array(array as number[]);
   } else if (dtype === 'int32') {
@@ -997,20 +934,6 @@ function makeZerosTypedArray<T extends keyof DataTypes>(
     return new Uint8Array(size);
   } else {
     throw new Error(`Unknown data type ${dtype}`);
-  }
-}
-
-function typedArrayToFloat32(
-    a: TypedArray, dtype: keyof DataTypes): Float32Array {
-  if (a instanceof Float32Array) {
-    return a;
-  } else {
-    const res = new Float32Array(a.length);
-    for (let i = 0; i < res.length; i++) {
-      const val = a[i];
-      res[i] = util.isValNaN(val, dtype) ? NaN : val;
-    }
-    return res;
   }
 }
 
